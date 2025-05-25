@@ -11,6 +11,7 @@ import logging
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
+from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -74,6 +75,33 @@ class ExperienceBuffer:
     def __len__(self):
         return len(self.buffer)
 
+class PrioritizedExperienceBuffer:
+    def __init__(self, capacity=10000, alpha=0.6):
+        self.buffer = deque(maxlen=capacity)
+        self.priorities = deque(maxlen=capacity)
+        self.alpha = alpha
+
+    def push(self, state, action, reward, next_state):
+        max_priority = max(self.priorities) if self.priorities else 1.0
+        self.buffer.append((state, action, reward, next_state))
+        self.priorities.append(max_priority)
+
+    def sample(self, batch_size):
+        if len(self.buffer) < batch_size:
+            raise ValueError(f"Not enough experiences in buffer. Have {len(self.buffer)}, need {batch_size}")
+            
+        probs = np.array(self.priorities) ** self.alpha
+        probs /= probs.sum()
+        
+        indices = np.random.choice(len(self.buffer), batch_size, p=probs)
+        samples = [self.buffer[idx] for idx in indices]
+        
+        # Convert to tuple of batches instead of separate lists
+        return tuple(zip(*samples))
+
+    def __len__(self):
+        return len(self.buffer)
+
 # ------------------- Transformer Model ------------------- #
 class TransformerDiagnosticAgent(nn.Module):
     def __init__(self, input_dim=10, model_dim=64, num_heads=4, num_layers=2, num_actions=10, dropout=0.1):
@@ -128,47 +156,85 @@ class TransformerDiagnosticAgent(nn.Module):
 # ------------------- Reward Function ------------------- #
 def compute_reward(action, label, is_sick, used_general_test, used_detailed_test):
     if action == 0:  # Wait
-        return -0.1 if is_sick else 0.0
+        return 0.0 if is_sick else 0.5  # Small positive reward for correct waiting
     elif action == 1:  # General Test
-        return -1.0 if is_sick else -5.0
+        if used_general_test:
+            return -2.0  # Reduced penalty
+        return 2.0 if is_sick else -1.0  # Increased reward for appropriate testing
     elif action == 2:  # Alert
-        return 5.0 if is_sick else -2.0
+        return 15.0 if is_sick else -5.0  # Higher reward for correct alert
     elif 3 <= action <= 8:  # Diagnosis
-        return 15.0 if action - 3 == label else -10.0
+        correct_diagnosis = (action - 3 == label)
+        if correct_diagnosis:
+            return 25.0  # Higher reward for correct diagnosis
+        return -5.0  # Reduced penalty
     elif action == 9:  # Detailed Test
         if not used_general_test:
-            return -10.0
-        return -2.0 if is_sick else -7.0
-    return -5.0
+            return -2.0
+        return 3.0 if is_sick else -1.0
+    return -1.0  # Reduced default penalty
+
+def normalize_rewards(rewards):
+    # Use clone().detach() instead of torch.tensor()
+    rewards = rewards.clone().detach()
+    return (rewards - rewards.mean()) / (rewards.std() + 1e-8)
 
 # ------------------- Q-learning Training ------------------- #
-def train_q_learning(model, train_loader, val_loader, num_epochs=10, gamma=0.95, lr=1e-3,
+def train_q_learning(model, train_loader, val_loader, num_epochs=20, gamma=0.99, lr=1e-4,
                     device='cuda' if torch.cuda.is_available() else 'cpu'):
-    # Initialize tensorboard writer
-    writer = SummaryWriter(f'runs/experiment_{datetime.now().strftime("%Y%m%d-%H%M%S")}')
+    # Reduce learning rate and add weight decay
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=3)
-    criterion = nn.MSELoss()
-    exp_buffer = ExperienceBuffer()
+    # Use Huber loss instead of MSE for better stability
+    criterion = nn.SmoothL1Loss()
     
-    model.to(device)
-    best_f1 = 0
-    patience = 5
-    patience_counter = 0
+    # Use prioritized experience replay
+    exp_buffer = PrioritizedExperienceBuffer(capacity=50000)
     
+    # Modify epsilon parameters
     epsilon_start = 1.0
-    epsilon_end = 0.01
+    epsilon_end = 0.1
     epsilon_decay = 0.995
     epsilon = epsilon_start
+    
+    # Add target network
+    target_model = TransformerDiagnosticAgent(
+        input_dim=10,
+        model_dim=128,
+        num_heads=8,
+        num_layers=3,
+        num_actions=10,
+        dropout=0.2
+    ).to(device)
+    target_model.load_state_dict(model.state_dict())
+    
+    # Update target network periodically
+    target_update_freq = 100
+    steps = 0
+    
+    # Calculate total steps for progress bar
+    total_steps = num_epochs * len(train_loader)
+    
+    # Initialize TensorBoard writer
+    writer = SummaryWriter(log_dir=f"runs/train_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    
+    # Early stopping variables
+    best_f1 = 0.0
+    patience = 10
+    patience_counter = 0
 
+    # Create progress bar
+    pbar = tqdm(total=total_steps, desc='Training Progress')
+    
     for epoch in range(num_epochs):
-        # Training phase
         model.train()
         total_loss = 0
         all_preds = []
         all_targets = []
         episode_rewards = []
+
+        # Add description to show current epoch
+        pbar.set_description(f'Epoch {epoch+1}/{num_epochs}')
 
         for state, label in train_loader:
             state = state.to(device)
@@ -229,12 +295,14 @@ def train_q_learning(model, train_loader, val_loader, num_epochs=10, gamma=0.95,
                 exp_buffer.push(state[i].cpu(), action, reward, 
                               state[i].cpu())  # Store experience
 
-            rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
+            rewards = torch.FloatTensor(rewards).to(device)  # If rewards is a list
+            # OR
+            # rewards = torch.stack(rewards).to(device)  # If rewards contains tensors
+            rewards = normalize_rewards(rewards).to(device)
             
             # Training step
             if len(exp_buffer) >= batch_size:
-                experiences = exp_buffer.sample(batch_size)
-                states, actions, rewards, next_states = zip(*experiences)
+                states, actions, rewards, next_states = exp_buffer.sample(batch_size)
                 
                 states = torch.stack(states).to(device)
                 next_states = torch.stack(next_states).to(device)
@@ -242,18 +310,26 @@ def train_q_learning(model, train_loader, val_loader, num_epochs=10, gamma=0.95,
                 rewards = torch.tensor(rewards).to(device)
 
                 current_q_values = model(states)
-                next_q_values = model(next_states).detach()
+                next_q_values = target_model(next_states).detach()
                 
-                max_next_q = torch.max(next_q_values, dim=1)[0]
+                # Compute target Q-values with double Q-learning
+                next_actions = model(next_states).argmax(dim=1)
+                max_next_q = next_q_values[torch.arange(batch_size), next_actions]
+                
+                # Add n-step returns (n=3)
+                n_step_reward = rewards
+                for i in range(2):  # Additional 2 steps
+                    if i < len(rewards) - 1:
+                        n_step_reward += (gamma ** (i + 1)) * rewards[i + 1]
+                
                 target_q = current_q_values.clone()
-                
                 for i in range(batch_size):
-                    target_q[i, actions[i]] = rewards[i] + gamma * max_next_q[i]
+                    target_q[i, actions[i]] = n_step_reward[i] + (gamma ** 3) * max_next_q[i]
 
                 loss = criterion(current_q_values, target_q)
                 
                 # Gradient clipping
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
                 
                 optimizer.zero_grad()
                 loss.backward()
@@ -308,6 +384,7 @@ def train_q_learning(model, train_loader, val_loader, num_epochs=10, gamma=0.95,
                    f"Mean Reward: {epoch_reward:.2f}, F1 Score: {train_f1:.4f}, "
                    f"Epsilon: {epsilon:.4f}")
 
+    pbar.close()
     writer.close()
     return model, {
         'train_losses': train_losses,
@@ -323,8 +400,11 @@ def validate_model(model, dataloader, device):
     all_targets = []
     total_reward = 0
     
+    # Add progress bar for validation
+    val_pbar = tqdm(dataloader, desc='Validating')
+    
     with torch.no_grad():
-        for state, label in dataloader:
+        for state, label in val_pbar:
             state = state.to(device)
             label = label.to(device)
             
@@ -341,7 +421,13 @@ def validate_model(model, dataloader, device):
             total_reward += sum(rewards)
             all_preds.extend(actions.cpu().numpy())
             all_targets.extend(label.cpu().numpy())
+            
+            # Update progress bar with current metrics
+            val_pbar.set_postfix({
+                'reward': f'{total_reward/len(all_preds):.2f}'
+            })
     
+    val_pbar.close()
     f1 = f1_score(all_targets, all_preds, average='weighted')
     return f1, total_reward / len(dataloader.dataset)
 
@@ -391,7 +477,14 @@ if __name__ == "__main__":
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
     
     # Train model
-    model = TransformerDiagnosticAgent()
+    model = TransformerDiagnosticAgent(
+        input_dim=10,
+        model_dim=128,  
+        num_heads=8,   
+        num_layers=3,   
+        num_actions=10,
+        dropout=0.2     
+    )
     trained_model, metrics = train_q_learning(model, train_loader, val_loader)
     
     # Plot training metrics
@@ -402,4 +495,10 @@ if __name__ == "__main__":
                                         'cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Test Set Performance - F1 Score: {test_f1:.4f}, "
                f"Average Reward: {test_reward:.2f}")
+    
+    # TensorBoard test logging
+    writer = SummaryWriter(log_dir="runs/test")
+    # Use the writer to log data
+    writer.add_scalar('Loss/train', 0.5, 0)
+    writer.close()
 
