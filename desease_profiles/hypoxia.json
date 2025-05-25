@@ -1,0 +1,24 @@
+{
+    "name": "hypoxia",
+    "vitals": {
+        "heart_rate": 95,
+        "blood_pressure": 100,
+        "oxygen_saturation": 85,
+        "temperature": 36.8
+    },
+    "subjective": {
+        "breathing_quality": 3,
+        "soreness": 1,
+        "fatigue": 3,
+        "mental_clarity": 2,
+        "appetite": 2
+    },
+    "test_signature": [
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+    ]
+}

@@ -1,0 +1,24 @@
+{
+    "name": "flu",
+    "vitals": {
+        "heart_rate": 100,
+        "blood_pressure": 110,
+        "oxygen_saturation": 96,
+        "temperature": 38.0
+    },
+    "subjective": {
+        "breathing_quality": 2,
+        "soreness": 3,
+        "fatigue": 3,
+        "mental_clarity": 2,
+        "appetite": 2
+    },
+    "test_signature": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+    ]
+}

@@ -1,0 +1,24 @@
+{
+    "name": "hypertension",
+    "vitals": {
+        "heart_rate": 80,
+        "blood_pressure": 160,
+        "oxygen_saturation": 98,
+        "temperature": 37.0
+    },
+    "subjective": {
+        "breathing_quality": 1,
+        "soreness": 1,
+        "fatigue": 2,
+        "mental_clarity": 3,
+        "appetite": 3
+    },
+    "test_signature": [
+        0,
+        0,
+        1,
+        0,
+        0,
+        0
+    ]
+}

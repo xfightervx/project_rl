@@ -1,0 +1,24 @@
+{
+    "name": "sepsis",
+    "vitals": {
+        "heart_rate": 120,
+        "blood_pressure": 90,
+        "oxygen_saturation": 92,
+        "temperature": 39.0
+    },
+    "subjective": {
+        "breathing_quality": 3,
+        "soreness": 3,
+        "fatigue": 3,
+        "mental_clarity": 1,
+        "appetite": 0
+    },
+    "test_signature": [
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+    ]
+}

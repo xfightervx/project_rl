@@ -1,0 +1,24 @@
+{
+    "name": "fever",
+    "vitals": {
+        "heart_rate": 90,
+        "blood_pressure": 115,
+        "oxygen_saturation": 97,
+        "temperature": 39.0
+    },
+    "subjective": {
+        "breathing_quality": 1,
+        "soreness": 2,
+        "fatigue": 2,
+        "mental_clarity": 3,
+        "appetite": 1
+    },
+    "test_signature": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+    ]
+}
