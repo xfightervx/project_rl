@@ -1,0 +1,31 @@
+
+    TRANSFORMER-BASED DQN ARCHITECTURE OVERVIEW
+    ==========================================
+    
+    1. INPUT LAYER
+       - 10 features: vitals + subjective symptoms + test results
+       - Sequence length: 20 timesteps
+       - Shape: (batch_size, 20, 10)
+    
+    2. TRANSFORMER ENCODER
+       - 3 encoder layers
+       - 8 attention heads
+       - Model dimension: 128
+       - Dropout: 0.2
+    
+    3. ATTENTION MECHANISM
+       - Weighted aggregation of sequence features
+       - Context vector generation
+       - Temporal pattern recognition
+    
+    4. DUELING Q-NETWORK
+       - Value Stream: Estimates state value V(s)
+       - Advantage Stream: Estimates action advantages A(s,a)
+       - Output: Q(s,a) = V(s) + A(s,a) - mean(A)
+    
+    5. OUTPUT
+       - 10 Q-values (one per action)
+       - Actions: Wait, Test, Alert, Diagnose (6 diseases)
+    
+    TRAINING METHOD: Deep Q-Learning with Experience Replay
+    
